@@ -28,6 +28,7 @@ static sector_t* disk;
  */
 int Disk_Init()
 {
+ 
   // create the disk image and fill every sector with zeroes
   disk = (sector_t *) calloc(TOTAL_SECTORS, sizeof(sector_t));
   if(disk == NULL) {

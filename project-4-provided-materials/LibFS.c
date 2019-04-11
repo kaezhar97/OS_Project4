@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include "LibDisk.h"
 #include "LibFS.h"
+#include <ctype.h>
 
 // set to 1 to have detailed debug print-outs and 0 to have none
 #define FSDEBUG 0
@@ -105,6 +106,10 @@ static char bs_filename[1024];
 // check magic number in the superblock; return 1 if OK, and 0 if not
 static int check_magic()
 {
+   
+  printf("DEBUG: size of inode_t = %d\n", sizeof(inode_t));
+
+
   char buf[SECTOR_SIZE];
   if(Disk_Read(SUPERBLOCK_START_SECTOR, buf) < 0)
     return 0;
@@ -164,7 +169,7 @@ static int read_flip_write(int start, char* buffer) {
                 osErrno = diskErrno;
                 return -1;
         }
-	return start * SECTOR_SIZE + location;
+	return (start - 1) * SECTOR_SIZE + location;
 }
 
 // initialize a bitmap with 'num' sectors starting from 'start'
@@ -177,8 +182,8 @@ static void bitmap_init(int start, int num, int nbits)
   char buffer[SECTOR_SIZE];
 
   /*DEBUG*/
-//  printf("DEBUG: bitmap_init has been called with start = %d, num = %d, and nbits = %d \n", start, num, nbits);
-//  printf("DEBUG: the size of one sector is %d\n", SECTOR_SIZE);
+  //printf("DEBUG: bitmap_init has been called with start = %d, num = %d, and nbits = %d \n", start, num, nbits);
+  //printf("DEBUG: the size of one sector is %d\n", SECTOR_SIZE);
   /*DEBUG*/
 
   if (num == 1) {
@@ -227,7 +232,7 @@ static int bitmap_first_unused(int start, int num, int nbits)
   char buffer[SECTOR_SIZE];
   int location;
    
-  for (i = start; i < num; i++) {
+  for (i = start; i < start + num; i++) {
 	location = read_flip_write(i, buffer);
   	if (location >= 0) {
 		return location;
@@ -244,8 +249,38 @@ static int bitmap_reset(int start, int num, int ibit)
   /* YOUR CODE */
   
   int i;
+  char buffer[SECTOR_SIZE];
+
+  /* iSector is the sector number after the start sector where the ibit is located
+     Example: if start = 5 and ibit = 1028, then iSector is 3. So ibit is located on the third sector 
+     counting from the start sector which is sector. The first sector is 5, the second one is 6
+     and the third one is sector 7. Therefore, ibit is found in sector 7.
+ */
+  int iSector = ibit/SECTOR_SIZE + 1;
+
+  /* Position is a 0 based index position of the ibit inside one sector
+     We substract the ibit the number of bits that are before the sector
+     it is found in. Then we substract one more because we want a 0 based
+     index position
+   */
+  int position = ibit - (iSector - 1) * SECTOR_SIZE - 1;
+
+  if (Disk_Read(start + (iSector - 1), buffer) < 0) {
+  	osErrno = diskErrno;
+	return -1;
+  }
 
 
+  for (i = 0; i < SECTOR_SIZE; i++) {
+  	if (i == position) {
+        	buffer[i] = '0';
+        }
+  }
+
+  if (Disk_Write(start + (iSector - 1), buffer) < 0) {
+  	osErrno = diskErrno;
+        return -1;  
+  }
 
   return -1;
 }
@@ -257,7 +292,32 @@ static int bitmap_reset(int start, int num, int ibit)
 static int illegal_filename(char* name)
 {
   /* YOUR CODE */
-  return 1; 
+
+  int i;
+  char c;
+
+  i = 0;
+  c = *name;
+  while (c != '\0') {
+	if (!isalnum(c)) {
+ 		if (c != '.') {
+			if (c != '-') {
+				if (c != '_') {
+					return 1;
+				}
+			}
+		}
+	}
+ 	
+	if (i > MAX_NAME - 1) {
+		return 1;
+	}
+	
+	i++;
+        c = *(name + i);
+  }
+
+  return 0; 
 }
 
 // return the child inode of the given file name 'fname' from the
@@ -384,6 +444,7 @@ int add_inode(int type, int parent_inode, char* file)
 {
   // get a new inode for child
   int child_inode = bitmap_first_unused(INODE_BITMAP_START_SECTOR, INODE_BITMAP_SECTORS, INODE_BITMAP_SIZE);
+
   if(child_inode < 0) {
     dprintf("... error: inode table is full\n");
     return -1; 
@@ -499,7 +560,55 @@ int create_file_or_directory(int type, char* pathname)
 int remove_inode(int type, int parent_inode, int child_inode)
 {
   /* YOUR CODE */
-  return -1;
+  int dirIsEmpty = 0;
+ 
+  //get child struct
+  int inode_sector = INODE_TABLE_START_SECTOR+child_inode/INODES_PER_SECTOR;
+  char inode_buffer[SECTOR_SIZE];
+  if(Disk_Read(inode_sector, inode_buffer) < 0) return -1;
+  int inode_start_entry = (inode_sector-INODE_TABLE_START_SECTOR)*INODES_PER_SECTOR;
+  int offset = child_inode-inode_start_entry;
+  inode_t* child = (inode_t*)(inode_buffer+offset*sizeof(inode_t));
+
+  //get parent struct 
+  inode_sector = INODE_TABLE_START_SECTOR+parent_inode/INODES_PER_SECTOR;
+  if(Disk_Read(inode_sector, inode_buffer) < 0) return -1;
+  inode_start_entry = (inode_sector-INODE_TABLE_START_SECTOR)*INODES_PER_SECTOR;
+  offset = parent_inode-inode_start_entry;
+  inode_t* parent = (inode_t*)(inode_buffer+offset*sizeof(inode_t));
+
+  //get dirent struct
+  int group = parent->size/DIRENTS_PER_SECTOR;
+  char dirent_buffer[SECTOR_SIZE];
+  if(Disk_Read(parent->data[group], dirent_buffer) < 0) return -1;
+  int start_entry = group*DIRENTS_PER_SECTOR;
+  offset = parent->size-start_entry;
+  dirent_t* dirent = (dirent_t*)(dirent_buffer+offset*sizeof(dirent_t));
+
+  //check if the parent is a directory
+  if(parent->type != 1) {
+    return -2; // parent is not a directory
+  }
+
+  //child is a directory
+  if (type == 1) {
+        //check if the directory is empty
+	if (child->size != 0) return -2;	
+  }
+
+  //reduce parent directory size
+  parent->size--;
+
+  //free file 
+  free(dirent);
+  free(child);
+
+  //reset child_inode bit 
+  if (bitmap_reset(INODE_BITMAP_START_SECTOR, INODE_BITMAP_SECTORS, child_inode) < 0) {
+  	return -1;
+  }
+
+  return 0;
 }
 
 // representing an open file
@@ -677,6 +786,19 @@ int File_Create(char* file)
 int File_Unlink(char* file)
 {
   /* YOUR CODE */
+  int child_inode;
+  int parent_inode = follow_path(file, &child_inode, last_fname);
+  
+  if (parent_inode < 0) {
+  	osErrno = E_NO_SUCH_FILE;
+	return -1;
+  }
+  else {
+  	
+  }
+  
+  
+
   return -1;
 }
 
