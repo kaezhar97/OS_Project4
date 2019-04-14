@@ -789,17 +789,22 @@ int File_Unlink(char* file)
   int child_inode;
   int parent_inode = follow_path(file, &child_inode, last_fname);
   
-  if (parent_inode < 0) {
+  if (parent_inode < 0 || child_inode <= 0) {
   	osErrno = E_NO_SUCH_FILE;
 	return -1;
   }
-  else {
-  	
+  
+  if (is_file_open(child_inode)) {
+		osErrno = E_FILE_IN_USE;
+		return -1;	
   }
-  
-  
+   
+  int removeResult = remove_inode(0, parent_inode, child_inode);
+  if (removeResult < 0) {
+  	return -1;
+  }
 
-  return -1;
+  return 0;
 }
 
 int File_Open(char* file)
@@ -893,7 +898,31 @@ int Dir_Create(char* path)
 int Dir_Unlink(char* path)
 {
   /* YOUR CODE */
-  return -1;
+  
+  int child_inode;
+  int parent_inode = follow_path(path, &child_inode, last_fname);
+
+  if (parent_inode < 0 || child_inode < 0) {
+        osErrno = E_NO_SUCH_DIR;
+        return -1;
+  }
+
+  if (child_node == 0) {
+  	osErrno = E_ROOT_DIR;
+	return -1;
+  }
+
+  if (is_file_open(child_inode)) {
+                osErrno = E_FILE_IN_USE;
+                return -1;
+  }
+
+  int removeResult = remove_inode(1, parent_inode, child_inode);
+  if (removeResult < 0) {
+        return -1;
+  }
+   
+  return 0;
 }
 
 int Dir_Size(char* path)
