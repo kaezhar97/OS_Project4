@@ -106,10 +106,6 @@ static char bs_filename[1024];
 // check magic number in the superblock; return 1 if OK, and 0 if not
 static int check_magic()
 {
-   
-  printf("DEBUG: size of inode_t = %d\n", sizeof(inode_t));
-
-
   char buf[SECTOR_SIZE];
   if(Disk_Read(SUPERBLOCK_START_SECTOR, buf) < 0)
     return 0;
@@ -282,7 +278,7 @@ static int bitmap_reset(int start, int num, int ibit)
         return -1;  
   }
 
-  return -1;
+  return 0;
 }
 
 // return 1 if the file name is illegal; otherwise, return 0; legal
@@ -560,7 +556,6 @@ int create_file_or_directory(int type, char* pathname)
 int remove_inode(int type, int parent_inode, int child_inode)
 {
   /* YOUR CODE */
-  int dirIsEmpty = 0;
  
   //get child struct
   int inode_sector = INODE_TABLE_START_SECTOR+child_inode/INODES_PER_SECTOR;
@@ -583,7 +578,6 @@ int remove_inode(int type, int parent_inode, int child_inode)
   if(Disk_Read(parent->data[group], dirent_buffer) < 0) return -1;
   int start_entry = group*DIRENTS_PER_SECTOR;
   offset = parent->size-start_entry;
-  dirent_t* dirent = (dirent_t*)(dirent_buffer+offset*sizeof(dirent_t));
 
   //check if the parent is a directory
   if(parent->type != 1) {
@@ -593,15 +587,11 @@ int remove_inode(int type, int parent_inode, int child_inode)
   //child is a directory
   if (type == 1) {
         //check if the directory is empty
-	if (child->size != 0) return -2;	
+	if (child->size == 0) return -2;	
   }
 
   //reduce parent directory size
   parent->size--;
-
-  //free file 
-  free(dirent);
-  free(child);
 
   //reset child_inode bit 
   if (bitmap_reset(INODE_BITMAP_START_SECTOR, INODE_BITMAP_SECTORS, child_inode) < 0) {
@@ -787,8 +777,8 @@ int File_Unlink(char* file)
 {
   /* YOUR CODE */
   int child_inode;
-  int parent_inode = follow_path(file, &child_inode, last_fname);
-  
+  int parent_inode = follow_path(file, &child_inode, NULL);
+
   if (parent_inode < 0 || child_inode <= 0) {
   	osErrno = E_NO_SUCH_FILE;
 	return -1;
@@ -798,8 +788,9 @@ int File_Unlink(char* file)
 		osErrno = E_FILE_IN_USE;
 		return -1;	
   }
-   
+
   int removeResult = remove_inode(0, parent_inode, child_inode);
+
   if (removeResult < 0) {
   	return -1;
   }
@@ -900,14 +891,14 @@ int Dir_Unlink(char* path)
   /* YOUR CODE */
   
   int child_inode;
-  int parent_inode = follow_path(path, &child_inode, last_fname);
+  int parent_inode = follow_path(path, &child_inode, NULL);
 
   if (parent_inode < 0 || child_inode < 0) {
         osErrno = E_NO_SUCH_DIR;
         return -1;
   }
 
-  if (child_node == 0) {
+  if (child_inode == 0) {
   	osErrno = E_ROOT_DIR;
 	return -1;
   }
@@ -928,7 +919,25 @@ int Dir_Unlink(char* path)
 int Dir_Size(char* path)
 {
   /* YOUR CODE */
-  return 0;
+    
+  int child_inode;
+  int parent_inode = follow_path(path, &child_inode, NULL); 
+
+    //get child struct
+  int inode_sector = INODE_TABLE_START_SECTOR+child_inode/INODES_PER_SECTOR;
+  char inode_buffer[SECTOR_SIZE];
+  if(Disk_Read(inode_sector, inode_buffer) < 0) return -1;
+  int inode_start_entry = (inode_sector-INODE_TABLE_START_SECTOR)*INODES_PER_SECTOR;
+  int offset = child_inode-inode_start_entry;
+
+  //get parent struct 
+  inode_sector = INODE_TABLE_START_SECTOR+parent_inode/INODES_PER_SECTOR;
+  if(Disk_Read(inode_sector, inode_buffer) < 0) return -1;
+  inode_start_entry = (inode_sector-INODE_TABLE_START_SECTOR)*INODES_PER_SECTOR;
+  offset = parent_inode-inode_start_entry;
+  inode_t* parent = (inode_t*)(inode_buffer+offset*sizeof(inode_t));
+
+  return (parent->size * 20);
 }
 
 int Dir_Read(char* path, void* buffer, int size)
