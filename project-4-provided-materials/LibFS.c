@@ -849,16 +849,94 @@ int File_Read(int fd, void* buffer, int size)
   return -1;
 }
 
-int File_Write(int fd, void* buffer, int size)
-{
+/* 
+Function: File_Write() 
+Description: Should write size bytes from buffer and write them into the
+file referenced by fd. 
+All writes should begin at the current location of
+the file pointer and the file pointer should be updated after the write to
+its current location plus size. Note that writes are the only way to extend
+the size of a file. 
+If the file is not open, return -1 and set osErrno to
+E_BAD_FD. Upon success of the write, all the data should be written out to
+disk and the value of size should be returned. If the write cannot complete
+(due to a lack of space on disk), return -1 and set osErrno to E_NO_SPACE.
+Finally, if the file exceeds the maximum file size, you should return -1 and
+set osErrno to E_FILE_TOO_BIG.
+*/
+
+int File_Write(int fd, void* buffer, int size){
   /* YOUR CODE */
-  return -1;
+  int remaining_bytes = size; // the bytes remaining to write
+	int initial_position = open_files[fd].pos; // initial position to start write
+	int start = open_files[fd].pos / SECTOR_SIZE; // current location of file pointer
+	int end = start + ((size+open_files[fd].pos+SECTOR_SIZE-1)/SECTOR_SIZE); // end point after write
+
+	// error checking
+	if(fd<0 && fd>MAX_OPEN_FILES) { // not enough space on the disk
+		osErrno = E_NO_SPACE;
+		return -1;
+	} else if(open_files[fd].inode < 1){ // if the file is not open
+		osErrno = E_BAD_FD;
+		return -1;
+	} else if(end > 29){ // file exceeds maximum file size
+		osErrno = E_FILE_TOO_BIG;
+		return -1;
+	}
+	
+	inode_t* inode = get_inode(open_files[fd].inode); // grab file inode
+	int i; 
+	for(i=start; i<end; i++) { // write everything byte by byte
+		char data_buffer[SECTOR_SIZE];
+		char disk_buffer[SECTOR_SIZE];
+		int sector = inode->data[i]; 
+
+		if(sector==0) // find location where the information should be stored
+			sector = bitmap_first_unused(SECTOR_BITMAP_START_SECTOR, SECTOR_BITMAP_SECTORS, SECTOR_BITMAP_SIZE);
+
+		if(open_files[fd].pos == 0){ 
+			// if all the remaining bytes don't fit in one sector
+			if(remaining_bytes >= SECTOR_SIZE){ // buffer gets as much as possible
+				memcpy(disk_buffer, (data_buffer + i*SECTOR_SIZE), SECTOR_SIZE);
+				remaining_bytes -= SECTOR_SIZE;
+			} else{ // buffer gets everything
+				memcpy(disk_buffer, (data_buffer + i*SECTOR_SIZE), remaining_bytes);
+				remaining_bytes = 0;				
+			}
+			Disk_Write(sector, disk_buffer); // write data to sector
+		} else{
+			Disk_Read(sector, disk_buffer);
+			memcpy(disk_buffer, (disk_buffer+open_files[fd].size), SECTOR_SIZE-open_files[fd].size);
+			Disk_Write(sector, disk_buffer);
+			remaining_bytes -= SECTOR_SIZE-open_files[fd].size;
+			open_files[fd].pos = 0;	
+		}	
+	}
+	open_files[fd].pos = initial_position+size; // move end file pointer to the end
+	return size; // return total number of bytes added
 }
 
-int File_Seek(int fd, int offset)
-{
-  /* YOUR CODE */
-  return 0;
+/* 
+ Function: File_Seek() 
+ Description: Updates the current location of the file pointer. The
+ location is given as an offset from the beginning of the file. If offset is
+ larger than the size of the file or negative, return -1 and set osErrno to
+ E_SEEK_OUT_OF_BOUNDS. If the file is not currently open, return -1 and set
+ osErrno to E_BAD_FD. Upon success, return the new location of the file
+ pointer. 
+*/
+int File_Seek(int fd, int offset) {
+	/* YOUR CODE */ 
+	if(is_file_open(open_files[fd].inode) != 1) {                     //file not open
+		osErrno = E_BAD_FD;
+		return -1; 
+	} else if(open_files[fd].size<offset || open_files[fd].size<0) { //if larger than file size then offset
+		osErrno = E_SEEK_OUT_OF_BOUNDS;
+		return -1;
+	}
+	  
+	open_files[fd].pos = offset;                                     //File pointer's new location
+	return open_files[fd].pos;  
 }
 
 int File_Close(int fd)
@@ -940,9 +1018,88 @@ int Dir_Size(char* path)
   return (parent->size * 20);
 }
 
-int Dir_Read(char* path, void* buffer, int size)
-{
+/**
+ Helper function: getPathType
+ Description: returns 0 if path leads to a directory or 1 if path leads to a file
+**/
+int getPathType(char* pathname) {
+	int token; 
+	char filename[MAX_NAME];
+
+	follow_path(pathname, &token, filename); //find token
+
+	if(token==-1)                            //if invalid token
+		return -1;
+
+	inode_t* inode = get_inode(token);       //get inode of the token
+	return inode->type;                      //return token type
+}
+
+/**
+ Helper function: get_inode
+ Description: gets a specific inode_t
+ **/
+inode_t* get_inode(int child_inode) {
+	  int inode_sector = INODE_TABLE_START_SECTOR+child_inode/INODES_PER_SECTOR;  //inode indexing
+  	char inode_buffer[SECTOR_SIZE];                                             //buffer to store the inode
+
+  	Disk_Read(inode_sector, inode_buffer);                                      //save data in inode_sector onto inode_buffer
+
+  	int child_loc = child_inode-((inode_sector-INODE_TABLE_START_SECTOR)*INODES_PER_SECTOR); //child-inode indexing 
+  	inode_t* child = (inode_t*)(inode_buffer+child_loc*sizeof(inode_t));
+  
+	return child;
+}
+
+/* 
+Function: Dir_Read() 
+Description: can be used to read the contents of a directory. It should
+return in the buffer a set of directory entries. Each entry is of size 20
+bytes and contains 16-byte names of the files (or directories) within the
+directory named by path, followed by the 4-byte integer inode number. If
+size is not big enough to contain all the entries, return -1 and set
+osErrno to E_BUFFER_TOO_SMALL. Otherwise, read the data into the buffer, 
+and return the number of directory entries that are in the directory (e.g.,
+2 if there are two entries in the directory). 
+*/
+int Dir_Read(char* path, void* buffer, int size){
   /* YOUR CODE */
+  int byte_count = 0;
+
+  if(getPathType(path)==1) {
+		int token;
+  	char filename[MAX_NAME];
+  	follow_path(path, &token, filename);            //locate location of token
+		
+		int dir_size = Dir_Size(path); 
+		dprintf("Size of directory: %d\n", dir_size);
+
+		if(size < dir_size) {                           //Size cannot have all entries
+			osErrno = E_BUFFER_TOO_SMALL;
+			return -1;
+		}
+
+		printf("\t%-15s\t%-s\n", "NAME", "INODE");
+		inode_t* inode = get_inode(token);
+		if(inode -> type == 1){                          //If it is a Directoru
+      
+      int i,j; 
+
+			for(i = 0; i < 30; i++) {                        //For the 30 allocated data blocks per file
+				int sector = (unsigned char)inode->data[i];
+				char sector_buffer[SECTOR_SIZE];
+				Disk_Read(sector, sector_buffer);
+							
+				for(j = 0; j < 25; j++) {
+					dirent_t* entry = (dirent_t*)(sector_buffer + (j*20));
+					
+					if(entry -> inode > 0)
+						printf("%-4d\t%-15s\t%-d\n", j, entry -> fname, entry -> inode);
+				}
+			}
+		}
+		return byte_count;
+	}
   return -1;
 }
 
