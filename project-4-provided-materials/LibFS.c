@@ -865,6 +865,22 @@ Finally, if the file exceeds the maximum file size, you should return -1 and
 set osErrno to E_FILE_TOO_BIG.
 */
 
+/**
+ Helper function: get_inode
+ Description: gets a specific inode_t
+ **/
+inode_t* get_inode(int child_inode) {
+	  int inode_sector = INODE_TABLE_START_SECTOR+child_inode/INODES_PER_SECTOR;  //inode indexing
+  	char inode_buffer[SECTOR_SIZE];                                             //buffer to store the inode
+
+  	Disk_Read(inode_sector, inode_buffer);                                      //save data in inode_sector onto inode_buffer
+
+  	int child_loc = child_inode-((inode_sector-INODE_TABLE_START_SECTOR)*INODES_PER_SECTOR); //child-inode indexing 
+  	inode_t* child = (inode_t*)(inode_buffer+child_loc*sizeof(inode_t));
+  
+	return child;
+}
+
 int File_Write(int fd, void* buffer, int size){
   /* YOUR CODE */
   int remaining_bytes = size; // the bytes remaining to write
@@ -1033,22 +1049,6 @@ int getPathType(char* pathname) {
 
 	inode_t* inode = get_inode(token);       //get inode of the token
 	return inode->type;                      //return token type
-}
-
-/**
- Helper function: get_inode
- Description: gets a specific inode_t
- **/
-inode_t* get_inode(int child_inode) {
-	  int inode_sector = INODE_TABLE_START_SECTOR+child_inode/INODES_PER_SECTOR;  //inode indexing
-  	char inode_buffer[SECTOR_SIZE];                                             //buffer to store the inode
-
-  	Disk_Read(inode_sector, inode_buffer);                                      //save data in inode_sector onto inode_buffer
-
-  	int child_loc = child_inode-((inode_sector-INODE_TABLE_START_SECTOR)*INODES_PER_SECTOR); //child-inode indexing 
-  	inode_t* child = (inode_t*)(inode_buffer+child_loc*sizeof(inode_t));
-  
-	return child;
 }
 
 /* 
