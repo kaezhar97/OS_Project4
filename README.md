@@ -1,5 +1,5 @@
 # OS_Project4 - File System Implementation
-Contributors: Octavio Avila-Cardet 
+Contributors: Octavio Avila-Cardet  5699410
               Kent Miguel           4804988
 
 This project aims to show students how a file system works. It focuses on the directory hierarchy and storage management in particular. In addition, to have a better understanding of some of the performance issues file systems encounter.

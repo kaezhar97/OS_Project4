@@ -13,7 +13,7 @@ clean:
 	rm -f $(TARGET) $(OBJS)
 
 %.o: %.c
-	$(CC) $(INCS) $(OPTS) -c $< -o $@
+	$(CC) $(INCS) $(OPTS) -c $< -o $@ -std=c99
 
 $(TARGET): $(OBJS)
-	$(CC) -shared -o $(TARGET) $(OBJS) $(LIBS)
+	$(CC) -shared -o $(TARGET) $(OBJS) $(LIBS) -std=c99
